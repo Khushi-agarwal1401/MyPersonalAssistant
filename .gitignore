@@ -1,0 +1,20 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+.venv/
+
+# Local chat history and settings
+jugnu_history.json
+jugnu_settings.json
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Local editor files
+.vscode/
+.idea/
