@@ -1,74 +1,83 @@
 # JUGNU – Personal AI Assistant 🤖
 
+[![Winter of Code Social 2026](https://img.shields.io/badge/WOCS-2026-blue?style=for-the-badge&logo=github)](https://woc.codesocial.tech)
+[![Python](https://img.shields.io/badge/Python-3.8+-yellow?style=for-the-badge&logo=python)](https://python.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](CONTRIBUTING.md)
+
 **JUGNU (Just an Unusually Genius Neural Utility)** is a personal desktop AI assistant built using Python, Tkinter, Ollama, and Llama 3.2.
 
-JUGNU is designed to provide a simple and friendly AI chat experience while exploring the practical use of AI and Machine Learning.
+JUGNU is designed to provide a simple and friendly AI chat experience while exploring practical AI and Machine Learning applications on the desktop.
+
+---
+
+## ❄️ Winter of Code Social (WOCS) 2026
+
+JUGNU is an official participating project in **Winter of Code Social (WOCS) 2026**! 🎉
+
+- 🌐 **WOCS Website**: [woc.codesocial.tech](https://woc.codesocial.tech)
+- 🏆 **Leaderboard**: [woc.codesocial.tech/leaderboard](https://woc.codesocial.tech/leaderboard)
+- 📖 **Contributor Guide**: Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting pull requests!
+
+### WOCS Difficulty Levels
+Contributors can earn points on the leaderboard based on merged PRs tagged with:
+- level 1 (2 points) - Beginner-friendly fixes, UI tweaks, doc updates.
+- level 2 (5 points) - Feature enhancements, refactoring, new UI options.
+- level 3 (11 points) - Advanced features, voice/model integration, major architecture upgrades.
+
+---
 
 ## ✨ Features
 
-- AI-powered chat using Llama 3.2
-- Persistent chat history
-- New Chat functionality
-- Clear Current Chat option
-- Dark and Light Mode
-- Current Date and Time support
-- Custom welcome screen with a robot mascot
+- 💬 AI-powered chat using local Llama 3.2 via Ollama
+- 📝 Persistent chat history
+- ➕ New Chat & Clear Current Chat options
+- 🌓 Dark and Light Mode support
+- 🕒 Current Date and Time support
+- 🤖 Custom welcome screen with mascot
 
 ## 🛠️ Tech Stack
 
-- Python
-- Tkinter
-- Ollama
-- Llama 3.2
-- Requests
-- JSON
+- **Language**: Python
+- **GUI**: Tkinter / ttk
+- **LLM Engine**: Ollama (Llama 3.2 3B)
+- **Networking**: Requests, JSON
 
 ## ⚙️ Setup Instructions
 
 ### 1. Install Python
-
-Install Python on your system.
+Ensure Python 3.8+ is installed on your system.
 
 ### 2. Install Ollama
-
-Download Ollama from https://ollama.com/
+Download and install Ollama from [ollama.com](https://ollama.com/).
 
 ### 3. Download the AI Model
-
 Open your terminal and run:
-
-```bash
+`ash
 ollama pull llama3.2:3b
-```
+`
 
 ### 4. Install Dependencies
-
-```bash
+`ash
 pip install requests
-```
+`
 
 ### 5. Run JUGNU
-
-```bash
+`ash
 python desktop_app.py
-```
+`
 
-## 🤝 Contributions
+---
 
-Contributions are welcome!
+## 🤝 Contributing
 
-You can help improve JUGNU by:
+We welcome contributions of all levels!
 
-- Enhancing the user interface
-- Adding voice input and output
-- Improving chat history management
-- Adding new AI features
-- Fixing bugs and improving performance
+Check out our [Open Issues](https://github.com/kismatkumari56/MyPersonalAssistant/issues) to find something you'd like to work on, and review [CONTRIBUTING.md](CONTRIBUTING.md) for full instructions and our AI policy.
 
-Feel free to open an issue or submit a pull request.
+---
 
 ## 👩‍💻 Project Admin
 
-Kismat Kumari
+**Kismat Kumari** ([@kismatkumari56](https://github.com/kismatkumari56))
 
 Built with curiosity 💜
