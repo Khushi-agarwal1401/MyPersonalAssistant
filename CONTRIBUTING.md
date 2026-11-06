@@ -2,7 +2,14 @@
 
 Thank you for your interest in contributing to **JUGNU**! We are excited to participate in **Winter of Code Social (WOCS) 2026** ❄️.
 
-Whether you are a seasoned open-source contributor or submitting your very first pull request, we are happy to welcome you!
+> [!CAUTION]
+> ### 🛑 MANDATORY ISSUE ASSIGNMENT POLICY
+> **DO NOT start working or open a Pull Request without being officially assigned to an issue first.**
+> 1. Browse the open issues.
+> 2. Leave a comment on the issue asking to be assigned.
+> 3. Wait until the Project Admin (**@kismatkumari56**) officially assigns the issue to you.
+> 
+> **Any Pull Request opened without prior assignment will be closed immediately without review.**
 
 ---
 
@@ -37,11 +44,10 @@ In accordance with WOCS guidelines, here is our project AI policy:
 
 ## 🚀 How to Contribute (Step-by-Step)
 
-### 1. Claim or Create an Issue
+### 1. Claim an Issue First (Required)
 - Browse open issues in the [Issues tab](https://github.com/kismatkumari56/MyPersonalAssistant/issues).
-- Look for good first issue, level 1, level 2, or level 3 tags.
-- Comment on the issue asking to be assigned. Please wait for assignment before starting work to avoid duplicate effort.
-- Have a new feature idea or found a bug? Open a new issue first to discuss it with maintainers.
+- Comment on the issue asking to be assigned.
+- **Wait for @kismatkumari56 to assign it to you before writing any code.**
 
 ### 2. Fork & Clone
 1. Fork this repository to your GitHub account.
@@ -64,7 +70,7 @@ git checkout -b fix/your-bugfix-name
 
 ### 4. Setup & Test Locally
 - Follow the setup guide in [README.md](README.md).
-- Install dependencies (pip install requests).
+- Install dependencies (pip install -r requirements.txt).
 - If working with Ollama, ensure ollama run llama3.2:3b is accessible.
 - Test your changes:
   `ash
@@ -74,7 +80,7 @@ git checkout -b fix/your-bugfix-name
 ### 5. Commit & Push
 - Write clear commit messages:
   `ash
-  git commit -m "feat: add clear chat confirmation dialog"
+  git commit -m "feat: add keyboard shortcut for send"
   `
 - Push to your fork:
   `ash
@@ -83,10 +89,8 @@ git checkout -b fix/your-bugfix-name
 
 ### 6. Submit a Pull Request
 - Open a PR against the main branch of kismatkumari56/MyPersonalAssistant.
-- In the PR description:
-  - Mention the related issue (e.g., Fixes #1).
-  - Describe the changes made and include screenshots/videos if UI changes were introduced.
-  - Request review from maintainers/mentors.
+- In the PR description, mention your assigned issue (e.g., Closes #5).
+- Ensure you follow the PR template checklist.
 
 ---
 
