@@ -17,6 +17,15 @@ except ImportError:  # JUGNU must still run when pyttsx3 is not installed
     pyttsx3 = None
 
 
+DEFAULT_RATE = 175      # words per minute
+DEFAULT_VOLUME = 1.0    # 0.0 (silent) to 1.0 (full)
+RATE_MIN, RATE_MAX = 80, 300
+
+
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
 def clean_for_speech(text):
     """Strip markdown, code and URLs so the voice doesn't read symbols aloud."""
     text = re.sub(r"```.*?```", " Code block omitted. ", text, flags=re.S)
@@ -32,10 +41,13 @@ def split_sentences(text):
 
 
 class TTSManager:
-    def __init__(self, rate=175, volume=1.0):
+    def __init__(self, rate=DEFAULT_RATE, volume=DEFAULT_VOLUME, voice_id=None):
         self.available = pyttsx3 is not None
-        self.rate = rate
-        self.volume = volume
+        self.rate = clamp(rate, RATE_MIN, RATE_MAX)
+        self.volume = clamp(volume, 0.0, 1.0)
+        self.voice_id = voice_id  # None means "the system's default voice"
+        self.voices = []          # [(voice_id, name)], filled in by the worker once the engine is up
+        self._settings_version = 0
         self._queue = queue.Queue()
         self._generation = 0
         self._pending = []  # generation of every item queued or being read, not yet finished
@@ -63,6 +75,18 @@ class TTSManager:
             return False
         with self._lock:
             return self._generation in self._pending
+
+    def apply_settings(self, rate, volume, voice_id):
+        """Change speed, volume and voice. Takes effect from the next sentence spoken.
+
+        Only remembers the new values; the worker thread, which owns the engine,
+        applies them. Nothing here waits for the engine, so the GUI never freezes.
+        """
+        with self._lock:
+            self.rate = clamp(rate, RATE_MIN, RATE_MAX)
+            self.volume = clamp(volume, 0.0, 1.0)
+            self.voice_id = voice_id
+            self._settings_version += 1
 
     def stop(self):
         """Interrupt current speech and drop anything still queued."""
@@ -98,15 +122,47 @@ class TTSManager:
             except ValueError:
                 pass
 
+    def _apply_pending_settings(self, engine, state):
+        """Worker thread only. Push changed settings into the engine."""
+        with self._lock:
+            version = self._settings_version
+            rate, volume, voice_id = self.rate, self.volume, self.voice_id
+        if version == state["version"]:
+            return
+        state["version"] = version
+        # Each property is set on its own, so one failure can't block the others.
+        for name, value in (("rate", rate), ("volume", volume)):
+            try:
+                engine.setProperty(name, value)
+            except Exception:
+                pass
+        # A saved voice that is no longer installed quietly falls back to the default.
+        known = {vid for vid, _ in self.voices}
+        wanted = voice_id if voice_id in known else state["default_voice"]
+        if wanted is not None:
+            try:
+                engine.setProperty("voice", wanted)
+            except Exception:
+                pass
+
     def _worker(self):
         try:
             engine = pyttsx3.init()
-            engine.setProperty("rate", self.rate)
-            engine.setProperty("volume", self.volume)
         except Exception:  # no usable speech driver / voice on this machine
             self.available = False
             return
         self._engine = engine
+
+        state = {"version": -1, "default_voice": None}
+        try:
+            state["default_voice"] = engine.getProperty("voice")
+        except Exception:
+            pass
+        try:
+            self.voices = [(v.id, v.name) for v in engine.getProperty("voices")]
+        except Exception:
+            self.voices = []
+        self._apply_pending_settings(engine, state)
 
         active = {"gen": None}
 
@@ -132,6 +188,7 @@ class TTSManager:
             for sentence in split_sentences(text):
                 if gen != self._current_generation():
                     break  # interrupted before this sentence started
+                self._apply_pending_settings(engine, state)  # picks up slider/voice changes
                 active["gen"] = gen
                 try:
                     engine.say(sentence)
