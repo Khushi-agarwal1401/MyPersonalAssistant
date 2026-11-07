@@ -13,7 +13,7 @@ import ast
 import re
 
 from strings import build_system_prompt, get_string, next_language, normalize_language
-from tts import TTSManager
+from tts import TTSManager, DEFAULT_RATE, DEFAULT_VOLUME, RATE_MIN, RATE_MAX, clamp
 from assistant import calculate, is_time_question as detect_time_question
 
 APP_TITLE = "JUGNU | Just an Unusually Genius Neural Utility"
@@ -53,7 +53,11 @@ class JugnuApp:
         self.busy = False
         self.dark_mode = self.load_settings()
         self.colors = DARK if self.dark_mode else LIGHT
-        self.tts = TTSManager()  # Offline voice output; runs on its own thread.
+        self.voice_rate, self.voice_volume, self.voice_id = self.load_voice_prefs()
+        self.tts = TTSManager(rate=self.voice_rate, volume=self.voice_volume,
+                              voice_id=self.voice_id)  # Offline voice output; runs on its own thread.
+        self.voice_win = None  # the Voice Settings window while it is open
+        self.vw = {}           # its widgets, so theme and language changes can update them
         self.voice_enabled = self.load_voice_setting()
         self.language = self.load_language_setting()
         self._status = ("status_ready", {})  # Remembered so the status line can be re-translated.
@@ -200,6 +204,25 @@ class JugnuApp:
         except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
             return False
 
+    def load_voice_prefs(self):
+        # Speed, volume and voice choice. Anything missing or damaged falls back to the defaults.
+        rate, volume, voice_id = DEFAULT_RATE, DEFAULT_VOLUME, None
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_rate = data.get("voice_rate")
+            saved_volume = data.get("voice_volume")
+            saved_voice = data.get("voice_id")
+            if isinstance(saved_rate, (int, float)) and not isinstance(saved_rate, bool):
+                rate = int(clamp(saved_rate, RATE_MIN, RATE_MAX))
+            if isinstance(saved_volume, (int, float)) and not isinstance(saved_volume, bool):
+                volume = float(clamp(saved_volume, 0.0, 1.0))
+            if isinstance(saved_voice, str) and saved_voice:
+                voice_id = saved_voice
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+            pass
+        return rate, volume, voice_id
+
     def load_language_setting(self):
         # English by default; an unknown or damaged value also falls back to English.
         try:
@@ -212,7 +235,8 @@ class JugnuApp:
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump({"dark_mode": self.dark_mode, "voice_enabled": self.voice_enabled,
-                           "language": self.language}, f)
+                           "language": self.language, "voice_rate": self.voice_rate,
+                           "voice_volume": self.voice_volume, "voice_id": self.voice_id}, f)
         except OSError:
             pass
 
@@ -253,6 +277,11 @@ class JugnuApp:
         self.voice_btn.pack(fill="x", padx=12, pady=(0, 8))
         if not self.tts.available:
             self.voice_btn.configure(state="disabled")  # pyttsx3 not installed
+        self.voice_settings_btn = tk.Button(self.sidebar, command=self.open_voice_settings,
+                                            relief="flat", pady=10)
+        self.voice_settings_btn.pack(fill="x", padx=12, pady=(0, 8))
+        if not self.tts.available:
+            self.voice_settings_btn.configure(state="disabled")
         self.language_btn = tk.Button(self.sidebar, command=self.toggle_language,
                                       relief="flat", pady=10)
         self.language_btn.pack(fill="x", padx=12, pady=(0, 8))
@@ -299,7 +328,7 @@ class JugnuApp:
         self.input_box.bind("<Control-Return>", self.send_message)
         self.input_box.bind("<Return>", self.send_message)
         self.input_box.bind("<Shift-Return>", lambda event: None)
-        self.send_btn = tk.Button(self.bottom, text="➤  Send", command=self.send_message,
+        self.send_btn = tk.Button(self.bottom, command=self.send_message,
                                   relief="flat", font=("Segoe UI", 10, "bold"), padx=18, pady=12)
         self.send_btn.pack(side="right")
 
@@ -390,7 +419,8 @@ class JugnuApp:
                                 activeforeground=c["accent2"], cursor="hand2")
         self.history_list.configure(bg=c["sidebar"], fg=c["text"],
                                     selectbackground=c["accent"], selectforeground="white")
-        for btn in [self.new_btn, self.theme_btn, self.voice_btn, self.language_btn]:
+        for btn in [self.new_btn, self.theme_btn, self.voice_btn, self.language_btn,
+                    self.voice_settings_btn]:
             btn.configure(bg=c["accent"], fg="white", activebackground=c["accent2"],
                           activeforeground="white", cursor="hand2")
         self.voice_btn.configure(text=self.voice_button_text())
@@ -400,6 +430,7 @@ class JugnuApp:
         self.send_btn.configure(bg=c["accent"], fg="white", activebackground=c["accent2"],
                                 activeforeground="white", cursor="hand2")
         self.theme_btn.configure(text=self.theme_button_text())
+        self.update_voice_window()
         self.refresh_history_list()
         self.display_chat()
 
@@ -439,6 +470,7 @@ class JugnuApp:
             self.stop_btn.pack_forget()
             self.stop_shown = False
         state = "normal" if self.tts.available else "disabled"
+        self.voice_settings_btn.configure(state=state)
         for btn in self.read_buttons:
             try:
                 btn.configure(state=state)
@@ -446,6 +478,135 @@ class JugnuApp:
                 pass  # its bubble was already redrawn
         if reschedule:
             self.root.after(200, self.poll_speech)
+
+    # ---------- Voice Settings window ----------
+    def voice_labels(self):
+        """Dropdown labels: the default entry first, then every installed voice (names made unique)."""
+        labels, ids, seen = [self.t("voice_default_name")], [None], {}
+        for vid, name in self.tts.voices:
+            seen[name] = seen.get(name, 0) + 1
+            labels.append(name if seen[name] == 1 else f"{name} ({seen[name]})")
+            ids.append(vid)
+        return labels, ids
+
+    def open_voice_settings(self):
+        if not self.tts.available:
+            return
+        if self.voice_win is not None:
+            self.voice_win.lift()
+            self.voice_win.focus_set()
+            return
+        win = tk.Toplevel(self.root)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", self.close_voice_settings)
+        self.voice_win = win
+        labels, ids = self.voice_labels()
+        # A saved voice that is no longer installed shows (and plays) as the default.
+        index = ids.index(self.voice_id) if self.voice_id in ids else 0
+        self.voice_choice = tk.StringVar(value=labels[index])
+        w = self.vw = {"win": win}
+        w["rate_label"] = tk.Label(win, font=("Segoe UI", 10, "bold"), anchor="w")
+        w["rate"] = tk.Scale(win, from_=RATE_MIN, to=RATE_MAX, resolution=5, orient="horizontal",
+                             showvalue=False, length=300, highlightthickness=0, bd=0)
+        w["volume_label"] = tk.Label(win, font=("Segoe UI", 10, "bold"), anchor="w")
+        w["volume"] = tk.Scale(win, from_=0, to=100, resolution=5, orient="horizontal",
+                               showvalue=False, length=300, highlightthickness=0, bd=0)
+        w["voice_label"] = tk.Label(win, font=("Segoe UI", 10, "bold"), anchor="w")
+        w["voice"] = tk.OptionMenu(win, self.voice_choice, *labels, command=self.on_voice_pick)
+        w["test"] = tk.Button(win, command=self.test_voice, relief="flat",
+                              font=("Segoe UI", 10, "bold"), pady=8)
+        w["close"] = tk.Button(win, command=self.close_voice_settings, relief="flat", pady=8)
+        # Set the starting positions first, then attach the callbacks, so opening the
+        # window never rewrites the saved values.
+        w["rate"].set(self.voice_rate)
+        w["volume"].set(round(self.voice_volume * 100))
+        w["rate"].configure(command=self.on_rate_change)
+        w["volume"].configure(command=self.on_volume_change)
+        for slider in (w["rate"], w["volume"]):
+            slider.bind("<ButtonRelease-1>", lambda _e: self.save_settings())
+            slider.bind("<KeyRelease>", lambda _e: self.save_settings())
+        for key in ("rate_label", "rate", "volume_label", "volume", "voice_label", "voice"):
+            w[key].pack(fill="x", padx=20, pady=(14, 0) if key.endswith("label") else (2, 0))
+        w["test"].pack(fill="x", padx=20, pady=(18, 6))
+        w["close"].pack(fill="x", padx=20, pady=(0, 18))
+        self.update_voice_window()
+
+    def update_voice_window(self):
+        # Re-apply text (language) and colours (theme) to the window if it is open.
+        if self.voice_win is None:
+            return
+        w, c = self.vw, self.colors
+        w["win"].title(self.t("voice_settings_title"))
+        w["win"].configure(bg=c["bg"])
+        self.update_voice_value_labels()
+        w["voice_label"].configure(text=self.t("voice_choice_label"))
+        w["test"].configure(text=self.t("voice_test_btn"))
+        w["close"].configure(text=self.t("voice_close_btn"))
+        for key in ("rate_label", "volume_label", "voice_label"):
+            w[key].configure(bg=c["bg"], fg=c["text"])
+        for key in ("rate", "volume"):
+            w[key].configure(bg=c["bg"], fg=c["text"], troughcolor=c["border"],
+                             activebackground=c["accent2"])
+        w["voice"].configure(bg=c["panel"], fg=c["text"], activebackground=c["accent"],
+                             activeforeground="white", highlightthickness=0, relief="flat")
+        w["voice"]["menu"].configure(bg=c["panel"], fg=c["text"], activebackground=c["accent"],
+                                     activeforeground="white")
+        w["test"].configure(bg=c["accent"], fg="white", activebackground=c["accent2"],
+                            activeforeground="white", cursor="hand2")
+        w["close"].configure(bg=c["danger"], fg=c["accent2"], activebackground=c["danger"],
+                             activeforeground=c["text"], cursor="hand2")
+        # The default entry's label depends on the language, so rebuild the dropdown list.
+        labels, ids = self.voice_labels()
+        menu = w["voice"]["menu"]
+        menu.delete(0, "end")
+        for label in labels:
+            menu.add_command(label=label, command=lambda lb=label: self.on_voice_pick(lb))
+        index = ids.index(self.voice_id) if self.voice_id in ids else 0
+        self.voice_choice.set(labels[index])
+
+    def update_voice_value_labels(self):
+        w = self.vw
+        w["rate_label"].configure(text=self.t("voice_rate_label", value=self.voice_rate))
+        w["volume_label"].configure(
+            text=self.t("voice_volume_label", value=round(self.voice_volume * 100)))
+
+    def push_voice_settings(self):
+        # Hand the current values to the speech thread. Cheap, so it is safe on every slider tick.
+        self.tts.apply_settings(self.voice_rate, self.voice_volume, self.voice_id)
+
+    def on_rate_change(self, value):
+        self.voice_rate = int(float(value))
+        self.push_voice_settings()
+        self.update_voice_value_labels()
+
+    def on_volume_change(self, value):
+        self.voice_volume = int(float(value)) / 100
+        self.push_voice_settings()
+        self.update_voice_value_labels()
+
+    def on_voice_pick(self, label):
+        labels, ids = self.voice_labels()
+        if label in labels:
+            self.voice_id = ids[labels.index(label)]
+            self.voice_choice.set(label)
+            self.push_voice_settings()
+            self.save_settings()
+
+    def test_voice(self):
+        # Plays a short sample with the current settings, even if the Voice toggle is off.
+        if not self.tts.available:
+            return
+        self.tts.stop()
+        self.tts.speak(self.t("voice_test_sample"))
+        self.poll_speech(reschedule=False)
+
+    def close_voice_settings(self):
+        self.save_settings()
+        if self.voice_win is not None:
+            self.voice_win.destroy()
+        self.voice_win = None
+        self.vw = {}
 
     def on_close(self):
         if self._resize_timer:
@@ -478,6 +639,8 @@ class JugnuApp:
         self.history_label.configure(text=self.t("history_label"))
         self.clear_btn.configure(text=self.t("clear_chat_btn"))
         self.voice_btn.configure(text=self.voice_button_text())
+        self.voice_settings_btn.configure(text=self.t("voice_settings_btn"))
+        self.update_voice_window()
         self.language_btn.configure(text=self.t("language_btn", name=self.t("language_name")))
         self.theme_btn.configure(text=self.theme_button_text())
         self.header_title.configure(text=self.t("header_title"))
@@ -607,17 +770,10 @@ class JugnuApp:
         row.pack(fill="x", pady=7, padx=8)
         bubble = tk.Frame(row, bg=c["user"] if is_user else c["assistant"])
         bubble.pack(side="right" if is_user else "left", padx=(40, 0) if is_user else (0, 40))
-        name = self.t("you_label") if is_user else "🤖 JUGNU"
-        tk.Label(bubble, text=name, bg=bubble["bg"], fg=c["accent"],
-                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", padx=12, pady=(8, 1))
-        tk.Label(bubble, text=text, bg=bubble["bg"], fg=c["text"],
-                 font=("Segoe UI", 10), justify="left", anchor="w",
-                 wraplength=680).pack(fill="x", padx=12, pady=(1, 10))
-
         header = tk.Frame(bubble, bg=bubble["bg"])
         header.pack(fill="x", padx=12, pady=(8, 2))
 
-        name = "You" if is_user else "🤖 JUGNU"
+        name = self.t("you_label") if is_user else "🤖 JUGNU"
         name_lbl = tk.Label(header, text=name, bg=bubble["bg"], fg=c["accent"],
                             font=("Segoe UI", 9, "bold"), anchor="w")
         name_lbl.pack(side="left")
