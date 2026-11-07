@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
+from tkinter import font as tkfont
+import math
 from datetime import datetime
 import json
 import threading
@@ -49,6 +51,11 @@ class JugnuApp:
         self.colors = DARK if self.dark_mode else LIGHT
         self.tts = TTSManager()  # Offline voice output; runs on its own thread.
         self.voice_enabled = self.load_voice_setting()
+        self.bubble_font = tkfont.Font(family="Segoe UI", size=10)
+        self.char_w = max(self.bubble_font.measure("0"), 1)
+        self.bubble_items = []
+        self._resize_timer = None
+        self.canvas_width = None
 
         self.build_ui()
         if self.chats:
@@ -251,6 +258,8 @@ class JugnuApp:
         self.messages_frame.bind("<Configure>", self.on_frame_configure)
         self.canvas.bind("<Configure>", self.on_canvas_configure)
         self.canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self.on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self.on_mousewheel)
 
         self.bottom = tk.Frame(self.content)
         self.bottom.pack(fill="x", padx=12, pady=(0, 12))
@@ -267,11 +276,66 @@ class JugnuApp:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def on_canvas_configure(self, event):
+        self.canvas_width = event.width
         self.canvas.itemconfigure(self.canvas_window, width=event.width)
+        if self._resize_timer:
+            try:
+                self.root.after_cancel(self._resize_timer)
+            except Exception:
+                pass
+        self._resize_timer = self.root.after(100, self.recalculate_bubbles)
+
+    def recalculate_bubbles(self):
+        canvas_w = getattr(self, "canvas_width", None) or self.canvas.winfo_width()
+        if canvas_w < 100 or not self.bubble_items:
+            return
+        max_bubble_px = min(720, max(280, canvas_w - 120))
+        max_cols = max(20, max_bubble_px // self.char_w)
+
+        # Phase 1: Update widths so Tk wraps lines to the new dimension
+        for bubble, txt, orig_text in self.bubble_items:
+            try:
+                lines = orig_text.splitlines() or [""]
+                max_line_px = max(self.bubble_font.measure(l) for l in lines)
+                cols = max(18, min(max_cols, max(1, math.ceil(max_line_px / self.char_w))))
+                txt.configure(state="normal", width=cols)
+            except tk.TclError:
+                pass
+
+        # Update geometry so displaylines accurately reflects the new width
+        self.root.update_idletasks()
+
+        # Phase 2: Set exact height matching display line count
+        for bubble, txt, orig_text in self.bubble_items:
+            try:
+                dlines = txt.count("1.0", "end", "displaylines")
+                h = max(1, dlines[0] - 1 if (dlines and orig_text.endswith("\n")) else (dlines[0] if dlines else 1))
+                txt.configure(height=h, state="disabled")
+            except tk.TclError:
+                pass
+
+        self.root.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def on_mousewheel(self, event):
         try:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            target = self.canvas
+            if event.widget == self.history_list:
+                target = self.history_list
+            elif event.widget == self.input_box:
+                target = self.input_box
+
+            if event.num == 4:
+                target.yview_scroll(-1, "units")
+            elif event.num == 5:
+                target.yview_scroll(1, "units")
+            elif event.delta:
+                delta = event.delta
+                if abs(delta) >= 120:
+                    target.yview_scroll(int(-1 * (delta / 120)), "units")
+                else:
+                    target.yview_scroll(int(-1 * delta), "units")
+            return "break"
         except tk.TclError:
             pass
 
@@ -320,6 +384,11 @@ class JugnuApp:
         self.save_settings()
 
     def on_close(self):
+        if self._resize_timer:
+            try:
+                self.root.after_cancel(self._resize_timer)
+            except Exception:
+                pass
         self.tts.shutdown()
         self.root.destroy()
 
@@ -382,6 +451,7 @@ class JugnuApp:
         self.display_chat()
 
     def display_chat(self):
+        self.bubble_items.clear()
         for child in self.messages_frame.winfo_children():
             child.destroy()
         chat = self.current_chat()
@@ -420,6 +490,22 @@ class JugnuApp:
         tk.Label(wrapper, text="What would you like to explore today?",
                  font=("Segoe UI", 12), bg=c["bg"], fg=c["accent"]).pack()
 
+    def copy_to_clipboard(self, text, button):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+            success_fg = "#10B981" if self.dark_mode else "#059669"
+            button.configure(text="✓ Copied!", fg=success_fg)
+            def revert():
+                try:
+                    button.configure(text="⧉ Copy", fg=self.colors["muted"], bg=button.master["bg"])
+                except tk.TclError:
+                    pass
+            self.root.after(1500, revert)
+        except Exception:
+            pass
+
     def add_bubble(self, role, text):
         c = self.colors
         is_user = role == "user"
@@ -427,13 +513,117 @@ class JugnuApp:
         row.pack(fill="x", pady=7, padx=8)
         bubble = tk.Frame(row, bg=c["user"] if is_user else c["assistant"])
         bubble.pack(side="right" if is_user else "left", padx=(40, 0) if is_user else (0, 40))
+
+        header = tk.Frame(bubble, bg=bubble["bg"])
+        header.pack(fill="x", padx=12, pady=(8, 2))
+
         name = "You" if is_user else "🤖 JUGNU"
-        tk.Label(bubble, text=name, bg=bubble["bg"], fg=c["accent"],
-                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", padx=12, pady=(8, 1))
-        tk.Label(bubble, text=text, bg=bubble["bg"], fg=c["text"],
-                 font=("Segoe UI", 10), justify="left", anchor="w",
-                 wraplength=680).pack(fill="x", padx=12, pady=(1, 10))
+        name_lbl = tk.Label(header, text=name, bg=bubble["bg"], fg=c["accent"],
+                            font=("Segoe UI", 9, "bold"), anchor="w")
+        name_lbl.pack(side="left")
+
+        copy_btn = tk.Button(header, text="⧉ Copy", font=("Segoe UI", 8, "bold"),
+                             relief="flat", bd=0, highlightthickness=0,
+                             bg=bubble["bg"], fg=c["muted"],
+                             highlightbackground=bubble["bg"],
+                             activebackground=c["border"], activeforeground=c["accent"],
+                             cursor="hand2", padx=6, pady=1)
+        copy_btn.pack(side="right", padx=(8, 0))
+        copy_btn.configure(command=lambda t=text, b=copy_btn: self.copy_to_clipboard(t, b))
+
+        hover_bg = c["border"]
+
+        def on_btn_enter(_event):
+            try:
+                if "Copied" not in copy_btn.cget("text"):
+                    copy_btn.configure(fg=c["accent"], bg=hover_bg)
+            except tk.TclError:
+                pass
+
+        def on_btn_leave(_event):
+            try:
+                if "Copied" not in copy_btn.cget("text"):
+                    copy_btn.configure(fg=c["muted"], bg=bubble["bg"])
+                else:
+                    copy_btn.configure(bg=bubble["bg"])
+            except tk.TclError:
+                pass
+
+        copy_btn.bind("<Enter>", on_btn_enter)
+        copy_btn.bind("<Leave>", on_btn_leave)
+
+        canvas_w = getattr(self, "canvas_width", None) or self.canvas.winfo_width()
+        if canvas_w < 200:
+            canvas_w = 700
+        max_bubble_px = min(720, max(280, canvas_w - 120))
+        max_cols = max(20, max_bubble_px // self.char_w)
+
+        lines = text.splitlines() or [""]
+        max_line_px = max(self.bubble_font.measure(l) for l in lines)
+        calc_cols = max(18, min(max_cols, max(1, math.ceil(max_line_px / self.char_w))))
+
+        txt = tk.Text(bubble, font=self.bubble_font, wrap="word", width=calc_cols,
+                      relief="flat", bd=0, highlightthickness=0,
+                      bg=bubble["bg"], fg=c["text"],
+                      selectbackground=c["accent"], selectforeground="white",
+                      inactiveselectbackground=c["accent"], cursor="xterm")
+        txt.insert("1.0", text)
+        txt.pack(fill="x", padx=12, pady=(2, 10))
+
+        # Forward mouse wheel events so scrolling over bubbles scrolls the canvas
+        for w in (row, bubble, header, name_lbl, copy_btn, txt):
+            w.bind("<MouseWheel>", self.on_mousewheel)
+            w.bind("<Button-4>", self.on_mousewheel)
+            w.bind("<Button-5>", self.on_mousewheel)
+
+        def copy_selection(_event=None):
+            try:
+                sel = txt.get("sel.first", "sel.last")
+                if sel:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(sel)
+                    self.root.update()
+                    return "break"
+            except tk.TclError:
+                pass
+
+        for key in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
+            txt.bind(key, copy_selection)
+
+        def select_all(_event=None):
+            txt.tag_add("sel", "1.0", "end - 1c")
+            return "break"
+
+        for key in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>"):
+            txt.bind(key, select_all)
+
+        menu = tk.Menu(txt, tearoff=0)
+        menu.add_command(label="Copy Selection", command=copy_selection)
+        menu.add_command(label="Select All", command=select_all)
+        menu.add_command(label="Copy All", command=lambda: self.copy_to_clipboard(text, copy_btn))
+
+        def show_context_menu(event):
+            try:
+                has_sel = bool(txt.tag_ranges("sel"))
+                menu.entryconfigure("Copy Selection", state="normal" if has_sel else "disabled")
+                menu.tk_popup(event.x_root, event.y_root)
+            except tk.TclError:
+                pass
+            finally:
+                try:
+                    menu.grab_release()
+                except tk.TclError:
+                    pass
+
+        txt.bind("<Button-3>", show_context_menu)
+        txt.bind("<Button-2>", show_context_menu)
+
         self.root.update_idletasks()
+        dlines = txt.count("1.0", "end", "displaylines")
+        h = max(1, dlines[0] - 1 if (dlines and text.endswith("\n")) else (dlines[0] if dlines else 1))
+        txt.configure(height=h, state="disabled")
+
+        self.bubble_items.append((bubble, txt, text))
 
     def set_status(self, text):
         self.status.configure(text="• " + text)
