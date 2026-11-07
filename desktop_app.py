@@ -9,10 +9,12 @@ import requests
 import uuid
 import os
 import tempfile
+import ast
+import re
 
 from strings import build_system_prompt, get_string, next_language, normalize_language
 from tts import TTSManager
-from assistant import is_time_question as detect_time_question
+from assistant import calculate, is_time_question as detect_time_question
 
 APP_TITLE = "JUGNU | Just an Unusually Genius Neural Utility"
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -295,7 +297,6 @@ class JugnuApp:
                                  relief="flat", padx=10, pady=10, undo=True)
         self.input_box.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.input_box.bind("<Control-Return>", self.send_message)
-        self.send_btn = tk.Button(self.bottom, command=self.send_message,
         self.input_box.bind("<Return>", self.send_message)
         self.input_box.bind("<Shift-Return>", lambda event: None)
         self.send_btn = tk.Button(self.bottom, text="➤  Send", command=self.send_message,
@@ -756,6 +757,61 @@ class JugnuApp:
     def is_time_question(self, text):
         return detect_time_question(text)
 
+    def extract_calc_expression(self, text):
+        """
+        Extracts an arithmetic expression from user input if present.
+        Supports explicit commands (e.g. 'calculate 12*7', 'solve 0/0'),
+        conversational math requests (e.g. 'the expression is 5/3+3', 'what is 12*7?'),
+        and plain arithmetic expressions (e.g. '12*7', '5/3+3').
+        Returns the expression string if detected, or None for general chat.
+        """
+        q = text.strip()
+        if not q:
+            return None
+
+        def is_math_ast(expr_str):
+            if re.search(r"\d{1,4}[-/]\d{1,2}[-/]\d{2,4}", expr_str):
+                return False
+            if re.fullmatch(r"[\d\.\s\+\-\*\/\%\(\)]+", expr_str):
+                if any(op in expr_str for op in ["+", "*", "/", "%"]) or re.search(r"\d\s*-\s*\d", expr_str):
+                    try:
+                        tree = ast.parse(expr_str, mode="eval")
+                        valid_nodes = (
+                            ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+                            ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
+                            ast.Mod, ast.Pow, ast.USub, ast.UAdd
+                        )
+                        if all(isinstance(node, valid_nodes) for node in ast.walk(tree)):
+                            if any(isinstance(node, ast.BinOp) for node in ast.walk(tree)):
+                                return True
+                    except Exception:
+                        pass
+            return False
+
+        # 1. Direct command prefixes: 'calculate', 'calc', 'solve', 'evaluate'
+        match = re.match(r"^(?:calculate|calc|solve|evaluate)(?:[:\s]+(.*)|$)", q, flags=re.IGNORECASE)
+        if match:
+            remainder = match.group(1).strip() if match.group(1) else ""
+            # Strip optional 'the expression' / 'the value of' from remainder, e.g. 'calculate the expression 5/3+3'
+            remainder = re.sub(r"^(?:the\s+)?(?:expression|value\s+of)[:\s]*", "", remainder, flags=re.IGNORECASE).strip()
+            return remainder
+
+        # 2. Conversational math prefixes: 'the expression is ...', 'expression: ...', 'what is ...', 'value of ...'
+        m_conv = re.match(
+            r"^(?:(?:what\s+is|what\'s)\s+(?:the\s+)?(?:value\s+of|expression\s+is|expression)?|(?:the\s+)?(?:expression|value)\s+(?:is|of)|expression)[:\s]*(.*)$",
+            q, flags=re.IGNORECASE
+        )
+        if m_conv and m_conv.group(1).strip():
+            candidate = m_conv.group(1).strip().rstrip("?. ")
+            if is_math_ast(candidate):
+                return candidate
+
+        # 3. Plain arithmetic expression (e.g. '12*7', '5/3+3', '0/0')
+        if is_math_ast(q):
+            return q
+
+        return None
+
     def send_message(self, _event=None):
         if self.busy:
             return "break"
@@ -784,6 +840,13 @@ class JugnuApp:
         # Answer clock/date questions locally for accuracy and speed—no model call required.
         if self.is_time_question(user_text):
             answer = self.t("time_answer", when=local_datetime_text())
+            self.finish_answer(answer, chat["id"])
+            return "break"
+
+        # Answer arithmetic questions locally using safe AST calculator—no model call required.
+        calc_expr = self.extract_calc_expression(user_text)
+        if calc_expr is not None:
+            answer = calculate(calc_expr)
             self.finish_answer(answer, chat["id"])
             return "break"
 
