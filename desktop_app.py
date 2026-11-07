@@ -11,6 +11,7 @@ import os
 import tempfile
 
 from tts import TTSManager
+from assistant import is_time_question as detect_time_question
 
 APP_TITLE = "JUGNU | Just an Unusually Genius Neural Utility"
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -642,12 +643,7 @@ class JugnuApp:
         threading.Thread(target=task, daemon=True).start()
 
     def is_time_question(self, text):
-        q = text.lower().strip()
-        keys = ["time", "date", "today", "day", "abhi time", "samay", "tareekh", "aaj"]
-        return any(k in q for k in keys) and any(
-            phrase in q for phrase in ["what time", "time kya", "date kya", "today", "aaj", "samay",
-                                      "tareekh", "current date", "current time", "which day", "what is the date"]
-        )
+        return detect_time_question(text)
 
     def send_message(self, _event=None):
         if self.busy:
