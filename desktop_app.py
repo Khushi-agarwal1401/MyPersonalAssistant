@@ -22,6 +22,22 @@ MODEL = "llama3.2:3b"
 HISTORY_FILE = "jugnu_history.json"
 SETTINGS_FILE = "jugnu_settings.json"
 
+
+class InvalidOllamaResponse(ValueError):
+    """The decoded response does not contain a usable chat message."""
+
+
+def ollama_answer(data):
+    if not isinstance(data, dict):
+        raise InvalidOllamaResponse()
+    message = data.get("message")
+    if not isinstance(message, dict):
+        raise InvalidOllamaResponse()
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise InvalidOllamaResponse()
+    return content.strip()
+
 LIGHT = {
     "bg": "#F7F4FF", "sidebar": "#EEE8FF", "panel": "#FFFFFF",
     "text": "#27213B", "muted": "#756B91", "accent": "#8B5CF6",
@@ -1032,9 +1048,11 @@ class JugnuApp:
                 "options": {"num_predict": 256, "temperature": 0.6}
             }, timeout=180)
             response.raise_for_status()
-            answer = response.json().get("message", {}).get("content", "").strip()
+            answer = ollama_answer(response.json())
             if not answer:
                 answer = get_string(language, "error_empty_reply")
+        except InvalidOllamaResponse:
+            answer = get_string(language, "error_invalid_response")
         except requests.Timeout:
             answer = get_string(language, "error_timeout")
         except requests.ConnectionError:

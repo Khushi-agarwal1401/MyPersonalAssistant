@@ -49,6 +49,7 @@ STRINGS = {
         "clear_dialog_message": "Permanently remove this chat from your history?",
         # Replies shown when something goes wrong
         "error_empty_reply": "Sorry, I got an empty response. Please try again.",
+        "error_invalid_response": "Ollama returned an invalid response. Please try again.",
         "error_timeout": ("The reply is taking too long. Please check that Ollama is running "
                           "and the model has loaded, then try again."),
         "error_connection": ("Can't connect to Ollama. Please check that Ollama is running "
@@ -96,6 +97,7 @@ STRINGS = {
         "clear_dialog_message": "Is current chat ko history se permanently clear kar dein?",
         # Replies shown when something goes wrong
         "error_empty_reply": "Sorry, mujhe empty response mila. Ek baar phir try karo.",
+        "error_invalid_response": "Ollama se sahi jawab nahi mila. Ek baar phir try karo.",
         "error_timeout": ("Response mein zyada time lag raha hai. "
                           "Ollama/model load check karke dobara try karo."),
         "error_connection": ("Ollama se connect nahi ho pa raha. "
