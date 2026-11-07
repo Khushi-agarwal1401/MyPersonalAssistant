@@ -10,6 +10,7 @@ import uuid
 import os
 import tempfile
 
+from strings import build_system_prompt, get_string, next_language, normalize_language
 from tts import TTSManager
 from assistant import is_time_question as detect_time_question
 
@@ -52,6 +53,8 @@ class JugnuApp:
         self.colors = DARK if self.dark_mode else LIGHT
         self.tts = TTSManager()  # Offline voice output; runs on its own thread.
         self.voice_enabled = self.load_voice_setting()
+        self.language = self.load_language_setting()
+        self._status = ("status_ready", {})  # Remembered so the status line can be re-translated.
         self.read_buttons = []  # "Read aloud" buttons currently on screen
         self.stop_shown = False  # is the header Stop button visible?
         self.bubble_font = tkfont.Font(family="Segoe UI", size=10)
@@ -65,6 +68,7 @@ class JugnuApp:
             self.current_id = self.chats[-1]["id"]  # Reopen most recent saved conversation.
         else:
             self.make_draft()
+        self.apply_language()
         self.apply_theme()
         self.root.after(250, self.warm_up)
         self.poll_speech()
@@ -149,6 +153,10 @@ class JugnuApp:
         temp_path = None
 
         try:
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(saved_chats, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            self.set_status("status_save_error", error=e)
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -190,14 +198,24 @@ class JugnuApp:
         except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
             return False
 
+    def load_language_setting(self):
+        # English by default; an unknown or damaged value also falls back to English.
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return normalize_language(json.load(f).get("language"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+            return normalize_language(None)
+
     def save_settings(self):
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"dark_mode": self.dark_mode, "voice_enabled": self.voice_enabled}, f)
+                json.dump({"dark_mode": self.dark_mode, "voice_enabled": self.voice_enabled,
+                           "language": self.language}, f)
         except OSError:
             pass
 
     def build_ui(self):
+        # Visible text is filled in by apply_language(), so it can be switched at runtime.
         self.main = tk.Frame(self.root)
         self.main.pack(fill="both", expand=True)
 
@@ -212,11 +230,11 @@ class JugnuApp:
                                 font=("Segoe UI", 9), justify="left", anchor="w", padx=20)
         self.tagline.pack(fill="x", pady=(0, 18))
 
-        self.new_btn = tk.Button(self.sidebar, text="＋  New Chat", command=self.new_chat,
+        self.new_btn = tk.Button(self.sidebar, command=self.new_chat,
                                  font=("Segoe UI", 10, "bold"), relief="flat", pady=12)
         self.new_btn.pack(fill="x", padx=12, pady=(0, 18))
 
-        self.history_label = tk.Label(self.sidebar, text="CHAT HISTORY", font=("Segoe UI", 9, "bold"),
+        self.history_label = tk.Label(self.sidebar, font=("Segoe UI", 9, "bold"),
                                       anchor="w", padx=18)
         self.history_label.pack(fill="x")
 
@@ -225,15 +243,18 @@ class JugnuApp:
         self.history_list.pack(fill="both", expand=True, padx=8, pady=8)
         self.history_list.bind("<<ListboxSelect>>", self.select_chat)
 
-        self.clear_btn = tk.Button(self.sidebar, text="▤  Clear Current Chat", command=self.clear_chat,
+        self.clear_btn = tk.Button(self.sidebar, command=self.clear_chat,
                                    relief="flat", pady=10)
         self.clear_btn.pack(fill="x", padx=12, pady=(4, 8))
-        self.voice_btn = tk.Button(self.sidebar, text="🔇  Voice: Off", command=self.toggle_voice,
+        self.voice_btn = tk.Button(self.sidebar, command=self.toggle_voice,
                                    relief="flat", pady=10)
         self.voice_btn.pack(fill="x", padx=12, pady=(0, 8))
         if not self.tts.available:
             self.voice_btn.configure(state="disabled")  # pyttsx3 not installed
-        self.theme_btn = tk.Button(self.sidebar, text="☼  Light Mode", command=self.toggle_theme,
+        self.language_btn = tk.Button(self.sidebar, command=self.toggle_language,
+                                      relief="flat", pady=10)
+        self.language_btn.pack(fill="x", padx=12, pady=(0, 8))
+        self.theme_btn = tk.Button(self.sidebar, command=self.toggle_theme,
                                    relief="flat", pady=10)
         self.theme_btn.pack(fill="x", padx=12, pady=(0, 12))
 
@@ -243,10 +264,10 @@ class JugnuApp:
         self.header = tk.Frame(self.content, height=64)
         self.header.pack(fill="x")
         self.header.pack_propagate(False)
-        self.header_title = tk.Label(self.header, text="✦  Your little genius is here!",
-                                     font=("Segoe UI", 15, "bold"), anchor="w", padx=22)
+        self.header_title = tk.Label(self.header, font=("Segoe UI", 15, "bold"),
+                                     anchor="w", padx=22)
         self.header_title.pack(side="left", fill="y")
-        self.status = tk.Label(self.header, text="• Ready", font=("Segoe UI", 9, "bold"),
+        self.status = tk.Label(self.header, font=("Segoe UI", 9, "bold"),
                                anchor="e", padx=18)
         self.status.pack(side="right", fill="y")
         # Shown only while speech is playing (see poll_speech); packed after status, so it sits left of it.
@@ -273,6 +294,8 @@ class JugnuApp:
         self.input_box = tk.Text(self.bottom, height=2, wrap="word", font=("Segoe UI", 11),
                                  relief="flat", padx=10, pady=10, undo=True)
         self.input_box.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.input_box.bind("<Control-Return>", self.send_message)
+        self.send_btn = tk.Button(self.bottom, command=self.send_message,
         self.input_box.bind("<Return>", self.send_message)
         self.input_box.bind("<Shift-Return>", lambda event: None)
         self.send_btn = tk.Button(self.bottom, text="➤  Send", command=self.send_message,
@@ -366,16 +389,16 @@ class JugnuApp:
                                 activeforeground=c["accent2"], cursor="hand2")
         self.history_list.configure(bg=c["sidebar"], fg=c["text"],
                                     selectbackground=c["accent"], selectforeground="white")
-        for btn in [self.new_btn, self.theme_btn, self.voice_btn]:
+        for btn in [self.new_btn, self.theme_btn, self.voice_btn, self.language_btn]:
             btn.configure(bg=c["accent"], fg="white", activebackground=c["accent2"],
                           activeforeground="white", cursor="hand2")
-        self.voice_btn.configure(text="🔊  Voice: On" if self.voice_enabled else "🔇  Voice: Off")
+        self.voice_btn.configure(text=self.voice_button_text())
         self.clear_btn.configure(bg=c["danger"], fg=c["accent2"], activebackground=c["danger"],
                                  activeforeground=c["text"], cursor="hand2")
         self.input_box.configure(bg=c["entry"], fg=c["text"], insertbackground=c["text"])
         self.send_btn.configure(bg=c["accent"], fg="white", activebackground=c["accent2"],
                                 activeforeground="white", cursor="hand2")
-        self.theme_btn.configure(text="☼  Light Mode" if self.dark_mode else "☾  Dark Mode")
+        self.theme_btn.configure(text=self.theme_button_text())
         self.refresh_history_list()
         self.display_chat()
 
@@ -389,7 +412,7 @@ class JugnuApp:
         self.voice_enabled = not self.voice_enabled
         if not self.voice_enabled:
             self.tts.stop()  # Muting silences the current reply immediately.
-        self.voice_btn.configure(text="🔊  Voice: On" if self.voice_enabled else "🔇  Voice: Off")
+        self.voice_btn.configure(text=self.voice_button_text())
         self.save_settings()
 
     def stop_speaking(self):
@@ -431,6 +454,35 @@ class JugnuApp:
                 pass
         self.tts.shutdown()
         self.root.destroy()
+
+    def t(self, key, **kwargs):
+        """Look up a user-facing string in the currently selected language."""
+        return get_string(self.language, key, **kwargs)
+
+    def voice_button_text(self):
+        return self.t("voice_on" if self.voice_enabled else "voice_off")
+
+    def theme_button_text(self):
+        return self.t("theme_to_light" if self.dark_mode else "theme_to_dark")
+
+    def toggle_language(self):
+        self.language = next_language(self.language)
+        self.save_settings()
+        self.apply_language()
+        self.display_chat()  # Redraw so the welcome screen and "You" labels switch too.
+
+    def apply_language(self):
+        # Set every piece of visible text from the strings dictionary.
+        self.new_btn.configure(text=self.t("new_chat_btn"))
+        self.history_label.configure(text=self.t("history_label"))
+        self.clear_btn.configure(text=self.t("clear_chat_btn"))
+        self.voice_btn.configure(text=self.voice_button_text())
+        self.language_btn.configure(text=self.t("language_btn", name=self.t("language_name")))
+        self.theme_btn.configure(text=self.theme_button_text())
+        self.header_title.configure(text=self.t("header_title"))
+        self.send_btn.configure(text=self.t("send_btn"))
+        key, kwargs = self._status
+        self.set_status(key, **kwargs)
 
     def refresh_history_list(self):
         selected = self.current_id
@@ -480,7 +532,7 @@ class JugnuApp:
         if not chat or not chat.get("messages"):
             # Nothing saved to clear; leave the empty draft alone.
             return
-        if not messagebox.askyesno("Clear Current Chat", "Is current chat ko history se permanently clear kar dein?"):
+        if not messagebox.askyesno(self.t("clear_dialog_title"), self.t("clear_dialog_message")):
             return
         self.tts.stop()
         self.chats = [saved for saved in self.chats if saved.get("id") != chat.get("id")]
@@ -524,11 +576,11 @@ class JugnuApp:
             tk.Label(wrapper, text="🤖", font=("Segoe UI Emoji", 76),
                      bg=c["bg"], fg=c["accent"]).pack(pady=(10, 18))
 
-        tk.Label(wrapper, text="Hey! I'm JUGNU",
+        tk.Label(wrapper, text=self.t("welcome_title"),
                  font=("Segoe UI", 23, "bold"), bg=c["bg"], fg=c["text"]).pack(pady=(4, 5))
         tk.Label(wrapper, text="Just an Unusually Genius Neural Utility",
                  font=("Segoe UI", 12), bg=c["bg"], fg=c["muted"]).pack(pady=(0, 10))
-        tk.Label(wrapper, text="What would you like to explore today?",
+        tk.Label(wrapper, text=self.t("welcome_prompt"),
                  font=("Segoe UI", 12), bg=c["bg"], fg=c["accent"]).pack()
 
     def copy_to_clipboard(self, text, button):
@@ -554,6 +606,12 @@ class JugnuApp:
         row.pack(fill="x", pady=7, padx=8)
         bubble = tk.Frame(row, bg=c["user"] if is_user else c["assistant"])
         bubble.pack(side="right" if is_user else "left", padx=(40, 0) if is_user else (0, 40))
+        name = self.t("you_label") if is_user else "🤖 JUGNU"
+        tk.Label(bubble, text=name, bg=bubble["bg"], fg=c["accent"],
+                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", padx=12, pady=(8, 1))
+        tk.Label(bubble, text=text, bg=bubble["bg"], fg=c["text"],
+                 font=("Segoe UI", 10), justify="left", anchor="w",
+                 wraplength=680).pack(fill="x", padx=12, pady=(1, 10))
 
         header = tk.Frame(bubble, bg=bubble["bg"])
         header.pack(fill="x", padx=12, pady=(8, 2))
@@ -677,8 +735,10 @@ class JugnuApp:
 
         self.bubble_items.append((bubble, txt, text))
 
-    def set_status(self, text):
-        self.status.configure(text="• " + text)
+    def set_status(self, key, **kwargs):
+        # Store the key (not the text) so a language switch can re-translate the status line.
+        self._status = (key, kwargs)
+        self.status.configure(text="• " + self.t(key, **kwargs))
 
     def warm_up(self):
         def task():
@@ -688,9 +748,9 @@ class JugnuApp:
                     "stream": False, "keep_alive": "10m",
                     "options": {"num_predict": 3}
                 }, timeout=90)
-                self.root.after(0, lambda: self.set_status("Ready"))
+                self.root.after(0, lambda: self.set_status("status_ready"))
             except requests.RequestException:
-                self.root.after(0, lambda: self.set_status("Ollama offline"))
+                self.root.after(0, lambda: self.set_status("status_offline"))
         threading.Thread(target=task, daemon=True).start()
 
     def is_time_question(self, text):
@@ -719,11 +779,11 @@ class JugnuApp:
         self.save_history()
         self.busy = True
         self.send_btn.configure(state="disabled")
-        self.set_status("Thinking…")
+        self.set_status("status_thinking")
 
         # Answer clock/date questions locally for accuracy and speed—no model call required.
         if self.is_time_question(user_text):
-            answer = "Abhi local date aur time hai: " + local_datetime_text()
+            answer = self.t("time_answer", when=local_datetime_text())
             self.finish_answer(answer, chat["id"])
             return "break"
 
@@ -731,6 +791,7 @@ class JugnuApp:
         return "break"
 
     def ask_ollama(self, chat_id):
+        language = self.language  # The prompt and any error text use the language chosen at send time.
         try:
             chat = next((c for c in self.chats if c.get("id") == chat_id), None)
             if not chat:
@@ -741,13 +802,7 @@ class JugnuApp:
             recent = chat.get("messages", [])[-10:]
             messages = [{
                 "role": "system",
-                "content": (
-                    "You are JUGNU, a helpful, friendly personal AI assistant. "
-                    "Give clear, concise answers by default (usually 2-5 sentences). "
-                    "Use easy language. If more detail is needed, provide it. "
-                    f"Current local date and time: {local_datetime_text()}. "
-                    "For date/time questions, use this exact current context; never guess."
-                )
+                "content": build_system_prompt(language, local_datetime_text())
             }]
             messages.extend({"role": m["role"], "content": m["content"]} for m in recent)
             response = requests.post(OLLAMA_URL, json={
@@ -760,13 +815,13 @@ class JugnuApp:
             response.raise_for_status()
             answer = response.json().get("message", {}).get("content", "").strip()
             if not answer:
-                answer = "Sorry, mujhe empty response mila. Ek baar phir try karo."
+                answer = get_string(language, "error_empty_reply")
         except requests.Timeout:
-            answer = "Response mein zyada time lag raha hai. Ollama/model load check karke dobara try karo."
+            answer = get_string(language, "error_timeout")
         except requests.ConnectionError:
-            answer = "Ollama se connect nahi ho pa raha. Check karo ki Ollama running hai aur model installed hai."
+            answer = get_string(language, "error_connection")
         except (requests.RequestException, ValueError) as e:
-            answer = f"Error: {e}"
+            answer = get_string(language, "error_generic", error=e)
         self.root.after(0, lambda: self.finish_answer(answer, chat_id))
 
     def finish_answer(self, answer, chat_id=None):
@@ -784,7 +839,7 @@ class JugnuApp:
                 self.tts.speak(answer)
         self.busy = False
         self.send_btn.configure(state="normal")
-        self.set_status("Ready")
+        self.set_status("status_ready")
         self.refresh_history_list()
 
 if __name__ == "__main__":
