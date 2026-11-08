@@ -58,6 +58,9 @@ def local_datetime_text():
     now = datetime.now().astimezone()
     return now.strftime("%A, %d %B %Y, %I:%M:%S %p %Z")
 
+def message_time_text():
+    return datetime.now().astimezone().strftime("%I:%M %p")
+
 class JugnuApp:
     def __init__(self, root):
         self.root = root
@@ -136,10 +139,15 @@ class JugnuApp:
                     if not isinstance(content, str) or not content.strip():
                         continue
 
-                    valid_messages.append({
+                    msg_dict = {
                         "role": role,
                         "content": content
-                    })
+                    }
+                    time_val = message.get("time")
+                    if isinstance(time_val, str) and time_val.strip():
+                        msg_dict["time"] = time_val.strip()
+
+                    valid_messages.append(msg_dict)
 
                 # Empty conversations should never appear in saved history.
                 if not valid_messages:
@@ -856,7 +864,7 @@ class JugnuApp:
             self.show_welcome()
         else:
             for msg in messages:
-                self.add_bubble(msg.get("role"), msg.get("content", ""))
+                self.add_bubble(msg.get("role"), msg.get("content", ""), timestamp=msg.get("time"))
         self.root.after(50, lambda: self.canvas.yview_moveto(1.0))
 
     def show_welcome(self):
@@ -902,7 +910,7 @@ class JugnuApp:
         except Exception:
             pass
 
-    def add_bubble(self, role, text):
+    def add_bubble(self, role, text, timestamp=None):
         c = self.colors
         is_user = role == "user"
         row = tk.Frame(self.messages_frame, bg=c["bg"])
@@ -916,6 +924,12 @@ class JugnuApp:
         name_lbl = tk.Label(header, text=name, bg=bubble["bg"], fg=c["accent"],
                             font=("Segoe UI", 9, "bold"), anchor="w")
         name_lbl.pack(side="left")
+
+        time_lbl = None
+        if timestamp:
+            time_lbl = tk.Label(header, text=timestamp, bg=bubble["bg"], fg=c["muted"],
+                                font=("Segoe UI", 8), anchor="w")
+            time_lbl.pack(side="left", padx=(8, 0))
 
         # Per-message Read aloud button (next to name/copy for assistant messages)
         read_btn = None
@@ -977,7 +991,12 @@ class JugnuApp:
         txt.pack(fill="x", padx=12, pady=(2, 10))
 
         # Forward mouse wheel events so scrolling over bubbles scrolls the canvas
-        for w in ([row, bubble, header, name_lbl, copy_btn, txt] + ([read_btn] if read_btn else [])):
+        widgets_to_bind = [row, bubble, header, name_lbl, copy_btn, txt]
+        if read_btn:
+            widgets_to_bind.append(read_btn)
+        if time_lbl:
+            widgets_to_bind.append(time_lbl)
+        for w in widgets_to_bind:
             w.bind("<MouseWheel>", self.on_mousewheel)
             w.bind("<Button-4>", self.on_mousewheel)
             w.bind("<Button-5>", self.on_mousewheel)
@@ -1123,9 +1142,10 @@ class JugnuApp:
             self.draft_chat = None
         if chat.get("title") == "New Chat":
             chat["title"] = user_text[:34]
-        chat["messages"].append({"role": "user", "content": user_text})
+        time_now = message_time_text()
+        chat["messages"].append({"role": "user", "content": user_text, "time": time_now})
         self.input_box.delete("1.0", "end")
-        self.add_bubble("user", user_text)
+        self.add_bubble("user", user_text, timestamp=time_now)
         self.refresh_history_list()
         self.save_history()
         self.busy = True
@@ -1188,12 +1208,13 @@ class JugnuApp:
         chat = self.current_chat()
         if chat_id:
             chat = next((c for c in self.chats if c.get("id") == chat_id), None)
+        time_now = message_time_text()
         if chat and isinstance(answer, str) and answer.strip():
-            chat["messages"].append({"role": "assistant", "content": answer})
+            chat["messages"].append({"role": "assistant", "content": answer, "time": time_now})
             self.save_history()
         # Only display if the user is still viewing the chat that received the answer.
         if chat and chat.get("id") == self.current_id:
-            self.add_bubble("assistant", answer)
+            self.add_bubble("assistant", answer, timestamp=time_now)
             self.canvas.yview_moveto(1.0)
             if self.voice_enabled:
                 self.tts.speak(answer)
