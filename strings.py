@@ -47,6 +47,14 @@ STRINGS = {
         # Dialogs
         "clear_dialog_title": "Clear Current Chat",
         "clear_dialog_message": "Permanently remove this chat from your history?",
+        "chat_menu_rename": "✎  Rename",
+        "chat_menu_delete": "🗑  Delete",
+        "rename_dialog_title": "Rename Chat",
+        "rename_dialog_prompt": "New name for this chat:",
+        "rename_save_btn": "Save",
+        "rename_cancel_btn": "Cancel",
+        "delete_chat_title": "Delete Chat",
+        "delete_chat_message": "Permanently delete “{title}”? This cannot be undone.",
         # Replies shown when something goes wrong
         "error_empty_reply": "Sorry, I got an empty response. Please try again.",
         "error_invalid_response": "Ollama returned an invalid response. Please try again.",
@@ -95,6 +103,14 @@ STRINGS = {
         # Dialogs
         "clear_dialog_title": "Current Chat Clear Karo",
         "clear_dialog_message": "Is current chat ko history se permanently clear kar dein?",
+        "chat_menu_rename": "✎  Naam Badlo",
+        "chat_menu_delete": "🗑  Delete Karo",
+        "rename_dialog_title": "Chat ka Naam Badlo",
+        "rename_dialog_prompt": "Is chat ka naya naam:",
+        "rename_save_btn": "Save Karo",
+        "rename_cancel_btn": "Cancel",
+        "delete_chat_title": "Chat Delete Karo",
+        "delete_chat_message": "“{title}” ko permanently delete kar dein? Ye wapas nahi aayegi.",
         # Replies shown when something goes wrong
         "error_empty_reply": "Sorry, mujhe empty response mila. Ek baar phir try karo.",
         "error_invalid_response": "Ollama se sahi jawab nahi mila. Ek baar phir try karo.",

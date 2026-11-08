@@ -21,6 +21,8 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "llama3.2:3b"
 HISTORY_FILE = "jugnu_history.json"
 SETTINGS_FILE = "jugnu_settings.json"
+MAX_LIST_TITLE = 34    # longer chat titles are shortened with "…" in the sidebar list
+MAX_TITLE_LENGTH = 60  # longest title a user can give a chat
 
 
 class InvalidOllamaResponse(ValueError):
@@ -284,6 +286,8 @@ class JugnuApp:
                                        font=("Segoe UI", 9), activestyle="none")
         self.history_list.pack(fill="both", expand=True, padx=8, pady=8)
         self.history_list.bind("<<ListboxSelect>>", self.select_chat)
+        self.history_list.bind("<Button-3>", self.show_chat_menu)  # right-click (Windows / Linux)
+        self.history_list.bind("<Button-2>", self.show_chat_menu)  # right-click (macOS)
 
         self.clear_btn = tk.Button(self.sidebar, command=self.clear_chat,
                                    relief="flat", pady=10)
@@ -669,7 +673,9 @@ class JugnuApp:
         self.history_list.delete(0, "end")
         for chat in reversed(self.chats):
             title = chat.get("title", "New Chat")
-            self.history_list.insert("end", "  ◌  " + title[:34])
+            if len(title) > MAX_LIST_TITLE:
+                title = title[:MAX_LIST_TITLE - 1] + "…"
+            self.history_list.insert("end", "  ◌  " + title)
         if selected:
             for idx, chat in enumerate(reversed(self.chats)):
                 if chat.get("id") == selected:
@@ -706,6 +712,123 @@ class JugnuApp:
             self.current_id = self.chats[index]["id"]
             self.draft_chat = None
             self.display_chat()
+
+    # ---------- Rename / Delete a single chat (right-click on the history list) ----------
+    def find_chat(self, chat_id):
+        return next((c for c in self.chats if c.get("id") == chat_id), None)
+
+    def chat_at_event(self, event):
+        """The saved chat under the mouse, or None when the click missed every row."""
+        if not self.chats:
+            return None
+        row = self.history_list.nearest(event.y)
+        box = self.history_list.bbox(row)
+        # nearest() also answers for empty space below the last row, so check the click really hit it.
+        if not box or not (box[1] <= event.y <= box[1] + box[3]):
+            return None
+        position = len(self.chats) - 1 - row  # the list shows newest first
+        return self.chats[position] if 0 <= position < len(self.chats) else None
+
+    def show_chat_menu(self, event):
+        chat = self.chat_at_event(event)
+        if chat is None:
+            return
+        c = self.colors
+        menu = tk.Menu(self.root, tearoff=0, bg=c["panel"], fg=c["text"],
+                       activebackground=c["accent"], activeforeground="white")
+        # The menu remembers the chat's id (not its row), so it acts on the chat that was clicked.
+        menu.add_command(label=self.t("chat_menu_rename"),
+                         command=lambda cid=chat["id"]: self.rename_chat(cid))
+        menu.add_command(label=self.t("chat_menu_delete"),
+                         command=lambda cid=chat["id"]: self.delete_chat(cid))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def rename_chat(self, chat_id):
+        chat = self.find_chat(chat_id)
+        if chat is None:
+            return
+        new_title = self.ask_chat_title(chat.get("title", ""))
+        if new_title is None:
+            return  # cancelled
+        new_title = " ".join(new_title.split())[:MAX_TITLE_LENGTH]  # tidy spaces, cap the length
+        if not new_title or new_title == chat.get("title"):
+            return  # an empty name is ignored: the old title stays
+        chat["title"] = new_title
+        self.save_history()
+        self.refresh_history_list()
+
+    def delete_chat(self, chat_id):
+        chat = self.find_chat(chat_id)
+        if chat is None:
+            return
+        if not messagebox.askyesno(self.t("delete_chat_title"),
+                                   self.t("delete_chat_message", title=chat.get("title", ""))):
+            return
+        was_open = chat_id == self.current_id
+        self.chats = [saved for saved in self.chats if saved.get("id") != chat_id]  # only this chat goes
+        if was_open:
+            self.tts.stop()
+            self.draft_chat = None
+            self.make_draft()  # deleting the open chat leaves a fresh empty one
+        self.save_history()
+        self.refresh_history_list()
+        if was_open:
+            self.display_chat()
+
+    def ask_chat_title(self, initial):
+        """Small themed dialog. Returns the text entered, or None if it was cancelled."""
+        c = self.colors
+        win = tk.Toplevel(self.root)
+        win.title(self.t("rename_dialog_title"))
+        win.configure(bg=c["bg"])
+        win.resizable(False, False)
+        win.transient(self.root)
+        result = {"value": None}
+
+        tk.Label(win, text=self.t("rename_dialog_prompt"), bg=c["bg"], fg=c["text"],
+                 font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=20, pady=(16, 4))
+        entry = tk.Entry(win, width=40, font=("Segoe UI", 11), relief="flat", bg=c["entry"],
+                         fg=c["text"], insertbackground=c["text"])
+        entry.insert(0, initial)
+        entry.pack(fill="x", padx=20, pady=(0, 12), ipady=6)
+
+        def accept(_event=None):
+            result["value"] = entry.get()
+            win.destroy()
+
+        def cancel(_event=None):
+            win.destroy()
+
+        buttons = tk.Frame(win, bg=c["bg"])
+        buttons.pack(fill="x", padx=20, pady=(0, 16))
+        tk.Button(buttons, text=self.t("rename_save_btn"), command=accept, relief="flat",
+                  bg=c["accent"], fg="white", activebackground=c["accent2"],
+                  activeforeground="white", cursor="hand2", padx=16, pady=6).pack(side="right")
+        tk.Button(buttons, text=self.t("rename_cancel_btn"), command=cancel, relief="flat",
+                  bg=c["danger"], fg=c["accent2"], activebackground=c["danger"],
+                  activeforeground=c["text"], cursor="hand2", padx=16, pady=6).pack(side="right", padx=(0, 8))
+        entry.bind("<Return>", accept)
+        win.bind("<Escape>", cancel)
+        win.protocol("WM_DELETE_WINDOW", cancel)
+
+        # Open next to the main window and keep focus here until it is closed.
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_reqheight()) // 3
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        try:
+            win.wait_visibility()
+            win.grab_set()
+        except tk.TclError:
+            pass
+        entry.focus_set()
+        entry.select_range(0, "end")
+        entry.icursor("end")
+        self.root.wait_window(win)
+        return result["value"]
 
     def clear_chat(self):
         chat = self.current_chat()
